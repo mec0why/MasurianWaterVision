@@ -12,8 +12,8 @@ def create_download_task(cache_folder="cached_data"):
         data_collection=DataCollection.SENTINEL2_L1C,
         bands_feature=(FeatureType.DATA, "BANDS"),
         resolution=10,
-        maxcc=0.1,
-        bands=["B02", "B03", "B04", "B08"],
+        maxcc=0.8,
+        bands=["B02", "B03", "B04", "B08", "B11"],
         additional_data=[
             (FeatureType.MASK, "dataMask", "IS_DATA"),
             (FeatureType.MASK, "CLM")
@@ -27,6 +27,14 @@ def create_ndwi_task():
         (FeatureType.DATA, "BANDS"),
         (FeatureType.DATA, "NDWI"),
         (1, 3)
+    )
+
+
+def create_ndsi_task():
+    return NormalizedDifferenceIndexTask(
+        (FeatureType.DATA, "BANDS"),
+        (FeatureType.DATA, "NDSI"),
+        (1, 4)
     )
 
 
@@ -82,6 +90,18 @@ def create_cloud_filter_task(threshold=0.05):
     )
 
 
+class IceFilterTask(EOTask):
+    def __init__(self, threshold=0.6):
+        self.threshold = threshold
+
+    def execute(self, eopatch):
+        ndsi = eopatch.data["NDSI"][..., 0]
+        nominal_water = eopatch.mask_timeless["NOMINAL_WATER"][..., 0].astype(bool)
+        valid_indices = [i for i in range(len(eopatch.timestamps))
+                        if np.nanmean(ndsi[i][nominal_water]) < self.threshold]
+        return eopatch.temporal_subset(valid_indices)
+
+
 class WaterDetectionTask(EOTask):
     @staticmethod
     def detect_water(ndwi):
@@ -111,23 +131,27 @@ class WaterDetectionTask(EOTask):
         return eopatch
 
 
-def create_workflow(gdf, cloud_threshold=0.05):
+def create_workflow(gdf, cloud_threshold=0.05, ice_threshold=0.6):
     download_task = create_download_task()
     calculate_ndwi = create_ndwi_task()
+    calculate_ndsi = create_ndsi_task()
     add_nominal_water = create_nominal_water_task(gdf)
     add_valid_mask = AddValidDataMaskTask()
     add_coverage = AddValidDataCoverageTask()
     remove_cloudy_scenes = create_cloud_filter_task(cloud_threshold)
+    remove_ice_scenes = IceFilterTask(ice_threshold)
     water_detection = WaterDetectionTask()
     output_task = OutputTask("final_eopatch")
 
     workflow_nodes = linearly_connect_tasks(
         download_task,
         calculate_ndwi,
+        calculate_ndsi,
         add_nominal_water,
         add_valid_mask,
         add_coverage,
         remove_cloudy_scenes,
+        remove_ice_scenes,
         water_detection,
         output_task,
     )

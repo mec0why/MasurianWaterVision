@@ -3,6 +3,7 @@ import os
 from src.data_preparation import load_water_boundary, create_bounding_box, create_geodataframe
 from src.water_detection import create_workflow
 from src.visualization import plot_rgb_w_water, plot_water_levels
+from datetime import datetime, timedelta
 
 
 def main():
@@ -23,7 +24,9 @@ def main():
     dam_gdf.plot()
     workflow, download_node = create_workflow(dam_gdf, cloud_threshold=0.05)
 
-    time_interval = ["2015-01-01", "2025-01-01"]
+    current_date = datetime.now()
+    ten_years_ago = current_date - timedelta(days=365*10)
+    time_interval = [ten_years_ago.strftime("%Y-%m-%d"), current_date.strftime("%Y-%m-%d")]
 
     print("Pobieranie i przetwarzanie zdjęć satelitarnych...")
     result = workflow.execute({

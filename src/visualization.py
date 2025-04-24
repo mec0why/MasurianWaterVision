@@ -30,16 +30,25 @@ def plot_rgb_w_water(eopatch, idx, title=None):
 
 
 def plot_water_levels(eopatch, max_coverage=1.0):
-    fig, ax = plt.subplots(figsize=(20, 7))
-
     dates = np.asarray(eopatch.timestamps)
 
     cloud_filter = eopatch.scalar["COVERAGE"][:, 0] < max_coverage
 
     median_level = np.median(eopatch.scalar["WATER_LEVEL"])
-    outlier_filter = eopatch.scalar["WATER_LEVEL"][:, 0] >= (median_level * 0.5)
+    outlier_filter = eopatch.scalar["WATER_LEVEL"][:, 0] >= (median_level * 0.96)
 
     valid_data = np.logical_and(cloud_filter, outlier_filter)
+
+    water_levels = eopatch.scalar["WATER_LEVEL"][valid_data, 0]
+    valid_indices = np.where(valid_data)[0]
+
+    max_idx = valid_indices[np.argmax(water_levels)]
+    min_idx = valid_indices[np.argmin(water_levels)]
+
+    plot_rgb_w_water(eopatch, max_idx, title=f"Najwyższy poziom wody - {eopatch.timestamps[max_idx]}")
+    plot_rgb_w_water(eopatch, min_idx, title=f"Najniższy poziom wody - {eopatch.timestamps[min_idx]}")
+
+    fig, ax = plt.subplots(figsize=(20, 7))
 
     ax.plot(
         dates[valid_data],
