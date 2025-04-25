@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 from src.data_preparation import load_water_boundary, create_bounding_box, create_geodataframe
 from src.water_detection import create_workflow
-from src.visualization import plot_rgb_w_water, plot_water_levels
+from src.visualization import plot_rgb_w_water, get_water_level_data, plot_water_levels
 from datetime import datetime, timedelta
 
 
@@ -42,6 +43,15 @@ def main():
     print("Generowanie i wyświetlanie wizualizacji...")
     plot_rgb_w_water(patch, 0, title=f"Pierwsze zdjęcie - {patch.timestamps[0]}")
     plot_rgb_w_water(patch, -1, title=f"Ostatnie zdjęcie - {patch.timestamps[-1]}")
+
+    dates, valid_data, valid_indices = get_water_level_data(patch, 1.0)
+    water_levels = patch.scalar["WATER_LEVEL"][valid_data, 0]
+    max_idx = valid_indices[np.argmax(water_levels)]
+    min_idx = valid_indices[np.argmin(water_levels)]
+    
+    plot_rgb_w_water(patch, max_idx, title=f"Najwyższy poziom wody - {patch.timestamps[max_idx]}")
+    plot_rgb_w_water(patch, min_idx, title=f"Najniższy poziom wody - {patch.timestamps[min_idx]}")
+
     plot_water_levels(patch, 1.0)
     plt.show()
 
