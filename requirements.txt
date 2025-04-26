@@ -5,3 +5,5 @@ sentinelhub~=3.11.1
 geopandas~=0.14.4
 shapely~=2.1.0
 eo-learn~=1.5.7
+seaborn~=0.13.1
+pandas~=2.2.3
