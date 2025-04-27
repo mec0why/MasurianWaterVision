@@ -5,9 +5,14 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from skimage.filters import sobel
 from skimage.morphology import closing, disk
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 
 def plot_rgb_w_water(eopatch, idx, title=None):
@@ -48,36 +53,251 @@ def get_water_level_data(eopatch, max_coverage=1.0):
     return dates, valid_data, valid_indices
 
 
-def plot_water_levels(eopatch, max_coverage=1.0):
+def train_water_level_model(dates, water_levels):
+    X = np.array([[
+        np.sin(2 * np.pi * d.timetuple().tm_yday / 365),
+        np.cos(2 * np.pi * d.timetuple().tm_yday / 365),
+        np.sin(2 * np.pi * d.month / 12),
+        np.cos(2 * np.pi * d.month / 12),
+        d.year
+    ] for d in dates])
+
+    X_train, X_test, y_train, y_test = train_test_split(X, water_levels, test_size=0.2, random_state=42)
+
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train_scaled, y_train)
+    
+    return model, scaler
+
+
+def predict_future_water_levels(model, scaler, last_date, periods=24):
+    future_dates = pd.date_range(start=last_date, periods=periods, freq='ME')
+
+    X_future = np.array([[
+        np.sin(2 * np.pi * d.timetuple().tm_yday / 365),
+        np.cos(2 * np.pi * d.timetuple().tm_yday / 365),
+        np.sin(2 * np.pi * d.month / 12),
+        np.cos(2 * np.pi * d.month / 12),
+        d.year
+    ] for d in future_dates])
+
+    X_future_scaled = scaler.transform(X_future)
+    predictions = np.clip(model.predict(X_future_scaled), 0, 1)
+    
+    return future_dates, predictions
+
+
+def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24):
     dates, valid_data, valid_indices = get_water_level_data(eopatch, max_coverage)
 
     fig, ax = plt.subplots(figsize=(20, 7))
 
-    ax.plot(
-        dates[valid_data],
-        eopatch.scalar["WATER_LEVEL"][valid_data],
+    hist_dates = dates[valid_data]
+    water_levels = eopatch.scalar["WATER_LEVEL"][valid_data, 0]
+
+    years = mdates.YearLocator()
+    months = mdates.MonthLocator()
+    years_fmt = mdates.DateFormatter('%Y')
+    months_fmt = mdates.DateFormatter('%b')
+    
+    ax.xaxis.set_major_locator(years)
+    ax.xaxis.set_major_formatter(years_fmt)
+    ax.xaxis.set_minor_locator(months)
+
+    if len(hist_dates) > 0:
+        min_date = min(hist_dates)
+        max_date = max(hist_dates)
+        if predict_months > 0 and len(hist_dates) > 10:
+            last_pred_date = min_date + pd.DateOffset(months=predict_months)
+            if last_pred_date > max_date:
+                max_date = last_pred_date
+
+        for year in range(min_date.year, max_date.year + 1):
+            summer_start = pd.Timestamp(f"{year}-06-01")
+            summer_end = pd.Timestamp(f"{year}-09-01")
+            if summer_start < max_date and summer_end > min_date:
+                ax.add_patch(Rectangle((mdates.date2num(summer_start), 0), 
+                                      mdates.date2num(summer_end) - mdates.date2num(summer_start),
+                                      1.1, color='yellow', alpha=0.1, zorder=0))
+
+            winter_start = pd.Timestamp(f"{year}-12-01")
+            winter_end = pd.Timestamp(f"{year+1}-03-01")
+            if winter_start < max_date and winter_end > min_date:
+                ax.add_patch(Rectangle((mdates.date2num(winter_start), 0), 
+                                      mdates.date2num(winter_end) - mdates.date2num(winter_start),
+                                      1.1, color='lightblue', alpha=0.1, zorder=0))
+
+    hist_line = ax.plot(
+        hist_dates,
+        water_levels,
         "bo-",
         alpha=0.7,
-        label="Poziom wody"
+        label="Poziom wody (historyczne)",
+        zorder=5
     )
 
-    ax.plot(
-        dates[valid_data],
-        eopatch.scalar["COVERAGE"][valid_data],
+    cloud_line = ax.plot(
+        hist_dates,
+        eopatch.scalar["COVERAGE"][valid_data, 0],
         "--",
         color="gray",
-        alpha=0.7,
-        label="Zachmurzenie"
+        alpha=0.5,
+        label="Zachmurzenie",
+        zorder=2
     )
 
-    ax.set_ylim(0.0, 1.1)
-    ax.set_xlabel("Data")
-    ax.set_ylabel("Poziom wody / Zachmurzenie")
-    ax.set_title("Poziom wody w jeziorze Świętajno")
-    ax.grid(axis="y")
-    ax.legend()
+    if len(hist_dates) > 2:
+        date_nums = mdates.date2num(hist_dates)
+        X = date_nums.reshape(-1, 1)
 
-    plt.tight_layout()
+        model = LinearRegression()
+        model.fit(X, water_levels)
+
+        trend_line = ax.plot(
+            hist_dates,
+            model.predict(X),
+            '-',
+            color='darkblue',
+            linewidth=1.5,
+            alpha=0.7,
+            label=f"Trend (zmiana {model.coef_[0]*365:.4f}/rok)",
+            zorder=4
+        )
+
+    if len(water_levels) > 0:
+        max_idx = np.argmax(water_levels)
+        min_idx = np.argmin(water_levels)
+
+        ax.plot(hist_dates[max_idx], water_levels[max_idx], 'ro', markersize=8, zorder=10)
+        ax.annotate(f'Max: {water_levels[max_idx]:.2f}',
+                   (hist_dates[max_idx], water_levels[max_idx]),
+                   xytext=(10, 10), textcoords='offset points',
+                   bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8),
+                   zorder=10)
+
+        ax.plot(hist_dates[min_idx], water_levels[min_idx], 'go', markersize=8, zorder=10)
+        ax.annotate(f'Min: {water_levels[min_idx]:.2f}',
+                   (hist_dates[min_idx], water_levels[min_idx]),
+                   xytext=(10, -15), textcoords='offset points',
+                   bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                   zorder=10)
+
+    mean_level = np.mean(water_levels)
+    median_level = np.median(water_levels)
+    std_level = np.std(water_levels)
+
+    stats_text = (f"Statystyki historyczne:\n"
+                 f"Średnia: {mean_level:.3f}\n"
+                 f"Mediana: {median_level:.3f}\n"
+                 f"Odch. std: {std_level:.3f}\n"
+                 f"Liczba pomiarów: {len(water_levels)}")
+
+    ax.text(0.02, 0.15, stats_text,
+            transform=ax.transAxes,
+            verticalalignment='bottom',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    if len(hist_dates) > 10 and predict_months > 0:
+        print("Trenowanie modelu do predykcji poziomów wody...")
+        model, scaler = train_water_level_model(hist_dates, water_levels)
+        future_dates, predictions = predict_future_water_levels(
+            model, scaler, hist_dates[-1], periods=predict_months
+        )
+
+        n_bootstrap = 100
+        bootstrap_predictions = []
+
+        indices = np.arange(len(hist_dates))
+        for _ in range(n_bootstrap):
+            bootstrap_indices = np.random.choice(indices, size=len(indices), replace=True)
+            bootstrap_dates = np.array(hist_dates)[bootstrap_indices]
+            bootstrap_levels = water_levels[bootstrap_indices]
+
+            boot_model, boot_scaler = train_water_level_model(bootstrap_dates, bootstrap_levels)
+            _, boot_pred = predict_future_water_levels(
+                boot_model, boot_scaler, hist_dates[-1], periods=predict_months
+            )
+            bootstrap_predictions.append(boot_pred)
+
+        bootstrap_predictions = np.array(bootstrap_predictions)
+        lower_ci = np.percentile(bootstrap_predictions, 5, axis=0)
+        upper_ci = np.percentile(bootstrap_predictions, 95, axis=0)
+
+        ax.fill_between(
+            future_dates,
+            lower_ci,
+            upper_ci,
+            color='red',
+            alpha=0.2,
+            label='90% przedział ufności'
+        )
+
+        pred_line = ax.plot(
+            future_dates,
+            predictions,
+            "--",
+            color="red",
+            linewidth=2,
+            alpha=0.8,
+            label="Predykcja AI",
+            zorder=6
+        )
+
+        ax.axvline(x=hist_dates[-1], color='red', linestyle='-', alpha=0.3)
+        ax.text(hist_dates[-1], 1.05, "Początek predykcji", ha='center', color='red')
+
+        pred_mean = np.mean(predictions)
+        pred_median = np.median(predictions)
+        pred_std = np.std(predictions)
+
+        pred_stats_text = (f"Statystyki predykcji:\n"
+                          f"Średnia: {pred_mean:.3f}\n"
+                          f"Mediana: {pred_median:.3f}\n"
+                          f"Odch. std: {pred_std:.3f}")
+
+        ax.text(0.98, 0.15, pred_stats_text,
+                transform=ax.transAxes,
+                verticalalignment='bottom',
+                horizontalalignment='right',
+                bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8))
+
+        print(f"Prognoza poziomów wody na kolejne {predict_months} miesiące (do {future_dates[-1].strftime('%Y-%m-%d')}).")
+
+    ax.axhline(y=mean_level, color='darkgrey', linestyle='--', alpha=0.5)
+    ax.text(0.01, mean_level+0.02, f'Średni poziom: {mean_level:.2f}',
+            transform=ax.get_yaxis_transform(), color='darkgrey')
+
+    ax.set_ylim(0.0, 1.1)
+    ax.set_xlabel("Data", fontsize=12)
+    ax.set_ylabel("Poziom wody / Zachmurzenie", fontsize=12)
+    ax.set_title("Poziom wody w jeziorze Świętajno - dane historyczne i predykcja AI", fontsize=14)
+
+    ax.grid(True, which='major', axis='both', alpha=0.3)
+    ax.grid(True, which='minor', axis='x', alpha=0.15)
+
+    plt.tight_layout(rect=[0, 0.1, 1, 1])
+
+    handles, labels = ax.get_legend_handles_labels()
+    season_elements = [
+        Rectangle((0, 0), 1, 1, color='yellow', alpha=0.2, label='Lato (Cze-Sie)'),
+        Rectangle((0, 0), 1, 1, color='lightblue', alpha=0.2, label='Zima (Gru-Lut)')
+    ]
+
+    fig.legend(handles=handles + season_elements, 
+              loc='lower center',
+              bbox_to_anchor=(0.5, 0.02),
+              fontsize=9,
+              ncol=len(handles + season_elements))
+    
+    current_date = pd.Timestamp.now()
+    if min(hist_dates) <= current_date <= max(future_dates if 'future_dates' in locals() else hist_dates):
+        ax.axvline(x=current_date, color='black', linestyle='-.', alpha=0.5)
+        ax.text(current_date, 0.02, 'Dziś', ha='center',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
     return ax, valid_data, valid_indices
 
 
