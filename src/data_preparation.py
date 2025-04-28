@@ -20,7 +20,7 @@ def create_bounding_box(geometry, buffer_percentage=0.1):
     miny = miny - dely * buffer_percentage
     maxy = maxy + dely * buffer_percentage
 
-    return BBox([minx, miny, maxx, maxy], crs=CRS.WGS84)
+    return BBox((minx, miny, maxx, maxy), crs=CRS.WGS84)
 
 
 def create_geodataframe(geometry):

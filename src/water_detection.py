@@ -65,13 +65,12 @@ class AddValidDataCoverageTask(EOTask):
         valid_data = eopatch[FeatureType.MASK, "VALID_DATA"]
         time, height, width, channels = valid_data.shape
 
-        coverage = np.apply_along_axis(
-            calculate_coverage,
-            1,
-            valid_data.reshape((time, height * width * channels))
-        )
+        coverage = []
+        for t in range(time):
+            data = valid_data[t].reshape(height * width * channels)
+            coverage.append(calculate_coverage(data))
 
-        eopatch[FeatureType.SCALAR, "COVERAGE"] = coverage[:, np.newaxis]
+        eopatch[FeatureType.SCALAR, "COVERAGE"] = np.array(coverage)[:, np.newaxis]
         return eopatch
 
 
@@ -97,14 +96,18 @@ class IceFilterTask(EOTask):
     def execute(self, eopatch):
         ndsi = eopatch.data["NDSI"][..., 0]
         nominal_water = eopatch.mask_timeless["NOMINAL_WATER"][..., 0].astype(bool)
-        valid_indices = [i for i in range(len(eopatch.timestamps))
-                        if np.nanmean(ndsi[i][nominal_water]) < self.threshold]
+
+        valid_indices = []
+        for i in range(len(eopatch.timestamps)):
+            ndsi_mean = np.nanmean(ndsi[i][nominal_water])
+            if ndsi_mean < self.threshold:
+                valid_indices.append(i)
+
         return eopatch.temporal_subset(valid_indices)
 
 
 class WaterDetectionTask(EOTask):
-    @staticmethod
-    def detect_water(ndwi):
+    def detect_water(self, ndwi):
         otsu_thr = 1.0
 
         if len(np.unique(ndwi)) > 1:
@@ -114,19 +117,21 @@ class WaterDetectionTask(EOTask):
         return ndwi > otsu_thr
 
     def execute(self, eopatch):
-        water_masks = np.asarray([
-            self.detect_water(ndwi[..., 0]) for ndwi in eopatch.data["NDWI"]
-        ])
+        water_masks = []
+        water_levels = []
 
-        water_masks = water_masks[..., np.newaxis] * eopatch.mask_timeless["NOMINAL_WATER"]
+        for ndwi in eopatch.data["NDWI"]:
+            mask = self.detect_water(ndwi[..., 0])
+            final_mask = mask[..., np.newaxis] * eopatch.mask_timeless["NOMINAL_WATER"]
+            water_masks.append(final_mask)
 
-        water_levels = np.asarray([
-            np.count_nonzero(mask) / np.count_nonzero(eopatch.mask_timeless["NOMINAL_WATER"])
-            for mask in water_masks
-        ])
+            total_water_pixels = np.count_nonzero(final_mask)
+            total_nominal_pixels = np.count_nonzero(eopatch.mask_timeless["NOMINAL_WATER"])
+            water_level = total_water_pixels / total_nominal_pixels if total_nominal_pixels > 0 else 0
+            water_levels.append(water_level)
 
-        eopatch[FeatureType.MASK, "WATER_MASK"] = water_masks
-        eopatch[FeatureType.SCALAR, "WATER_LEVEL"] = water_levels[..., np.newaxis]
+        eopatch[FeatureType.MASK, "WATER_MASK"] = np.array(water_masks)
+        eopatch[FeatureType.SCALAR, "WATER_LEVEL"] = np.array(water_levels)[..., np.newaxis]
 
         return eopatch
 
