@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
+from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -180,7 +180,7 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24):
 
     ax.set_ylim(0.0, 1.1)
     ax.set_xlabel("Rok", fontsize=12)
-    ax.set_ylabel("Poziom wody / Zachmurzenie", fontsize=12)
+    ax.set_ylabel("Poziom wody (ułamek całkowitego pokrycia) / Zachmurzenie (%)", fontsize=12)
     ax.set_title("Poziom wody w jeziorze - dane historyczne i predykcja AI", fontsize=14)
     ax.grid(True, alpha=0.3)
 
@@ -216,7 +216,7 @@ def plot_ndvi(eopatch, idx, title=None, compare_idx=None):
     if compare_idx is None:
         fig, ax = plt.subplots(figsize=(ratio * 10, 10))
         im = ax.imshow(ndvi, cmap=ndvi_cmap, vmin=-1, vmax=1)
-        plt.colorbar(im, ax=ax).set_label('NDVI')
+        plt.colorbar(im, ax=ax).set_label('NDVI (indeks -1 do 1)')
         ax.set_title(title if title else f"NDVI - {eopatch.timestamps[idx]}")
         ax.axis("off")
         return fig, ax
@@ -239,7 +239,7 @@ def plot_ndvi(eopatch, idx, title=None, compare_idx=None):
         ax2.axis("off")
 
         cax = make_axes_locatable(ax2).append_axes("right", size="3%", pad=0.2)
-        cbar = fig.colorbar(im1, cax=cax).set_label('NDVI', fontsize=12)
+        cbar = fig.colorbar(im1, cax=cax).set_label('NDVI (indeks -1 do 1)', fontsize=12)
 
         if title:
             fig.suptitle(title, fontsize=16, y=0.98)
@@ -248,69 +248,112 @@ def plot_ndvi(eopatch, idx, title=None, compare_idx=None):
         return fig, (ax1, ax2)
 
 
-def plot_water_coverage_heatmap(eopatch, max_coverage=1.0):
+def plot_seasonal_water_levels(eopatch, max_coverage=1.0):
     dates, valid_data, _ = get_water_level_data(eopatch, max_coverage)
     valid_dates = dates[valid_data]
-
-    water_masks = eopatch.mask["WATER_MASK"][valid_data, :, :, 0]
-    water_percentages = np.sum(water_masks, axis=(1, 2)) / (water_masks.shape[1] * water_masks.shape[2]) * 100
+    water_levels = eopatch.scalar["WATER_LEVEL"][valid_data, 0]
 
     df = pd.DataFrame({
         'date': valid_dates,
-        'water_pct': water_percentages,
-        'water_level': eopatch.scalar["WATER_LEVEL"][valid_data, 0]
+        'water_level': water_levels,
+        'month': [d.month for d in valid_dates],
+        'season': [('Zima' if m in [12, 1, 2] else
+                    'Wiosna' if m in [3, 4, 5] else
+                    'Lato' if m in [6, 7, 8] else 'Jesień')
+                   for m in [d.month for d in valid_dates]]
     })
 
-    max_idx = df['water_pct'].idxmax()
-    min_idx = df['water_pct'].idxmin()
+    season_order = ['Zima', 'Wiosna', 'Lato', 'Jesień']
+    season_colors = {'Zima': 'lightblue', 'Wiosna': 'springgreen',
+                     'Lato': 'gold', 'Jesień': 'orange'}
+    month_colors = ['lightblue'] * 3 + ['springgreen'] * 3 + ['gold'] * 3 + ['orange'] * 3
+    month_colors = [month_colors[m - 1] for m in range(1, 13)]
 
-    fig, ax_level = plt.subplots(figsize=(18, 7))
-    ax_level.plot(df['date'], df['water_level'], 'b-', alpha=0.8, linewidth=2.5, label='Poziom wody')
-    ax_level.set_ylabel('Poziom wody', fontsize=12)
-    ax_level.set_ylim(0, 1)
-    ax_level.grid(True, alpha=0.3)
+    season_stats = df.groupby('season')['water_level'].agg(['mean', 'count']).reset_index()
+    season_stats = pd.merge(
+        pd.DataFrame({'season': season_order}),
+        season_stats,
+        on='season',
+        how='left'
+    ).fillna({'mean': 0, 'count': 0})
+    season_stats['count'] = season_stats['count'].astype(int)
 
-    ax_coverage = ax_level.twinx()
-    water_cmap = LinearSegmentedColormap.from_list('WaterCoverage', [(0.9, 0.9, 0.9), (0.6, 0.8, 1), (0, 0.4, 0.8)])
+    fig, ax = plt.subplots(figsize=(12, 8))
+    plt.subplots_adjust(bottom=0.20, top=0.90)
 
-    scatter = ax_coverage.scatter(df['date'], df['water_pct'], c=df['water_pct'], cmap=water_cmap,
-                                  s=50 + (df['water_pct'] / df['water_pct'].max() * 150),
-                                  alpha=0.7, edgecolor='darkblue', linewidth=0.5, label='Pokrywa wodna')
+    monthly_avg = df.groupby('month')['water_level'].agg(['mean', 'std', 'count']).reset_index()
+    all_months = pd.DataFrame({'month': range(1, 13)})
+    monthly_avg = pd.merge(all_months, monthly_avg, on='month', how='left').fillna({'mean': 0, 'std': 0, 'count': 0})
+    monthly_avg['count'] = monthly_avg['count'].astype(int)
 
-    ax_coverage.set_yticks([])
-    ax_coverage.set_ylim(df['water_pct'].min() * 0.95, df['water_pct'].max() * 1.05)
+    month_names = ['Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru']
+    monthly_avg['month_name'] = [month_names[m - 1] for m in monthly_avg['month']]
 
-    for year in sorted(df['date'].dt.year.unique())[1:]:
-        ax_level.axvline(pd.Timestamp(f"{year}-01-01"), color='gray', linestyle='--', alpha=0.3)
+    ax.bar(monthly_avg['month'], monthly_avg['mean'], yerr=monthly_avg['std'],
+           alpha=0.7, capsize=5, color=month_colors)
 
-    ax_level.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    ax_level.xaxis.set_major_locator(mdates.YearLocator())
+    for i, row in monthly_avg.iterrows():
+        ax.text(row['month'], 0.01, f'n={row["count"]}',
+                ha='center', va='bottom', fontsize=9,
+                color='dimgray', rotation=90)
 
-    ax_level.set_title('Zmiana poziomu i pokrycia wodnego w czasie', fontsize=14)
-    ax_level.set_xlabel('Rok', fontsize=12)
+    ax.set_xticks(monthly_avg['month'])
+    ax.set_xticklabels(monthly_avg['month_name'])
+    ax.set_xlabel('Miesiąc', fontsize=14)
+    ax.set_ylabel('Poziom wody (ułamek pokrycia)', fontsize=14)
+    ax.grid(True, alpha=0.3, axis='y')
 
-    ax_coverage.annotate(f'Max: {df.loc[max_idx, "water_pct"]:.1f}%',
-                         xy=(df.loc[max_idx, 'date'], df.loc[max_idx, 'water_pct']),
-                         xytext=(20, 15), textcoords="offset points", ha='center', va='bottom',
-                         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="darkblue", alpha=0.8),
-                         arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='darkblue'))
+    if len(df) > 0:
+        overall_avg = df['water_level'].mean()
+        ax.axhline(y=overall_avg, color='red', linestyle='--', alpha=0.7)
+        ax.text(11.5, overall_avg + 0.005, f'Śr. roczna: {overall_avg:.3f}',
+                ha='right', color='red', bbox=dict(facecolor='white', alpha=0.7))
 
-    ax_coverage.annotate(f'Min: {df.loc[min_idx, "water_pct"]:.1f}%',
-                         xy=(df.loc[min_idx, 'date'], df.loc[min_idx, 'water_pct']),
-                         xytext=(-20, -15), textcoords="offset points", ha='center', va='top',
-                         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="darkblue", alpha=0.8),
-                         arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='darkblue'))
+        season_text = []
+        for season, stats in season_stats.iterrows():
+            if stats['count'] > 0:
+                season_text.append(f"{stats['season']}: {stats['mean']:.3f} (n={stats['count']})")
 
-    cbar = fig.colorbar(scatter, ax=ax_coverage, pad=0.01, fraction=0.025)
-    cbar.set_label('Pokrywa wodna (%)', fontsize=12)
+        ax.text(0.98, 0.97, "\n".join(season_text),
+                transform=ax.transAxes, ha='right', va='top',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.8),
+                fontsize=10)
 
-    ax_level.legend(handles=[
-        Line2D([0], [0], color='blue', lw=2.5, label='Poziom wody'),
-        Line2D([0], [0], marker='o', color='white', label='Pokrywa wodna', markerfacecolor=water_cmap(0.8),
-               markersize=10)
-    ], loc='upper left')
+        non_zero_values = monthly_avg[monthly_avg['mean'] > 0]
+        if len(non_zero_values) > 0:
+            max_idx = non_zero_values['mean'].idxmax()
+            min_idx = non_zero_values['mean'].idxmin()
 
-    return fig, ax_level
+            max_month = monthly_avg.iloc[max_idx]
+            min_month = monthly_avg.iloc[min_idx]
+
+            ax.annotate(f'Max: {max_month["mean"]:.3f}',
+                        xy=(max_month["month"], max_month["mean"]),
+                        xytext=(0, 25), textcoords="offset points",
+                        ha='center', va='bottom',
+                        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                        arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='green'))
+
+            if max_idx != min_idx:
+                ax.annotate(f'Min: {min_month["mean"]:.3f}',
+                            xy=(min_month["month"], min_month["mean"]),
+                            xytext=(0, -25), textcoords="offset points",
+                            ha='center', va='top',
+                            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.8),
+                            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=.2", color='red'))
+
+            max_val = non_zero_values['mean'].max()
+            min_val = non_zero_values['mean'].min()
+            padding = (max_val - min_val) * 0.3 if max_val > min_val else 0.05
+            ax.set_ylim(max(0, min_val - padding), min(1, max_val + padding))
+
+    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in season_colors.values()]
+    fig.legend(handles, season_colors.keys(), loc='lower center',
+               bbox_to_anchor=(0.5, 0.05), ncol=4, fontsize=12)
+
+    fig.suptitle('Analiza sezonowa poziomów wody w jeziorze', fontsize=18, y=0.95)
+
+    return fig, ax
 
 
 def plot_water_mask_comparison(eopatch, idx1, idx2, titles=None):
@@ -318,9 +361,9 @@ def plot_water_mask_comparison(eopatch, idx1, idx2, titles=None):
     mask2 = eopatch.mask["WATER_MASK"][idx2, :, :, 0]
 
     diff_mask = np.zeros_like(mask1, dtype=np.uint8)
-    diff_mask[np.logical_and(~mask1, mask2)] = 1  # Nowa woda
-    diff_mask[np.logical_and(mask1, ~mask2)] = 2  # Zanikła woda
-    diff_mask[np.logical_and(mask1, mask2)] = 3  # Stała woda
+    diff_mask[np.logical_and(~mask1, mask2)] = 1
+    diff_mask[np.logical_and(mask1, ~mask2)] = 2
+    diff_mask[np.logical_and(mask1, mask2)] = 3
 
     diff_cmap = ListedColormap(['#f2f2f2', '#21a9e1', '#e10c0c', '#0c5de1'])
 
@@ -380,9 +423,9 @@ def plot_water_level_histogram(eopatch, max_coverage=1.0, bins=20):
     ])
 
     ax.legend(handles=handles)
-    ax.set_xlabel('Poziom wody')
-    ax.set_ylabel('Częstotliwość')
-    ax.set_title('Rozkład poziomów wody')
+    ax.set_xlabel('Poziom wody (ułamek całkowitego pokrycia)')
+    ax.set_ylabel('Częstotliwość (liczba obserwacji)')
+    ax.set_title('Rozkład poziomów wody w jeziorze')
     ax.grid(True, alpha=0.3)
 
     ax.text(0.02, 0.98,

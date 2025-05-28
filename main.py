@@ -6,7 +6,7 @@ from src.data_preparation import load_water_boundary, create_bounding_box, creat
 from src.water_detection import create_workflow
 from src.visualization import (
     plot_rgb_w_water, get_water_level_data, plot_water_levels,
-    plot_ndvi, plot_water_coverage_heatmap, plot_water_mask_comparison, plot_water_level_histogram
+    plot_ndvi, plot_seasonal_water_levels, plot_water_mask_comparison, plot_water_level_histogram
 )
 
 
@@ -56,8 +56,6 @@ def main():
     patch = result.outputs["final_eopatch"]
     print(f"Znaleziono {len(patch.timestamps)} pasujących zdjęć satelitarnych.")
 
-    print("Generowanie i wyświetlanie wizualizacji...")
-
     plot_rgb_w_water(patch, 0, title=f"Pierwsze zdjęcie - {patch.timestamps[0]}")
     save_plot("first_image.png")
 
@@ -78,8 +76,8 @@ def main():
     plot_water_levels(patch, 1.0)
     save_plot("water_levels_timeline.png")
 
-    plot_water_coverage_heatmap(patch, max_coverage=1.0)
-    save_plot("water_coverage_heatmap.png")
+    plot_seasonal_water_levels(patch, max_coverage=1.0)
+    save_plot("seasonal_water_levels.png")
 
     plot_water_level_histogram(patch, max_coverage=1.0)
     save_plot("water_level_histogram.png")
@@ -107,6 +105,7 @@ def main():
     print("Wykresy zostały zapisane w folderze plots.")
 
     plt.show()
+    print("Wyświetlanie wizualizacji...")
 
 
 if __name__ == "__main__":
