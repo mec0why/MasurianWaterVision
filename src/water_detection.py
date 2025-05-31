@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from skimage.filters import threshold_otsu
 from eolearn.core import EOTask, EOWorkflow, FeatureType, OutputTask, linearly_connect_tasks
@@ -7,12 +8,16 @@ from eolearn.io import SentinelHubInputTask
 from sentinelhub import DataCollection
 
 
-def create_download_task(cache_folder="cached_data"):
+def create_download_task(cache_folder=None, maxcc=0.8, resolution=None):
+    if cache_folder is None:
+        cache_folder = os.getenv("CACHE_FOLDER", "cached_data")
+    if resolution is None:
+        resolution = int(os.getenv("SATELLITE_IMAGE_RESOLUTION", 10))
     return SentinelHubInputTask(
         data_collection=DataCollection.SENTINEL2_L1C,
         bands_feature=(FeatureType.DATA, "BANDS"),
-        resolution=10,
-        maxcc=0.8,
+        resolution=resolution,
+        maxcc=maxcc,
         bands=["B02", "B03", "B04", "B08", "B11"],
         additional_data=[
             (FeatureType.MASK, "dataMask", "IS_DATA"),
@@ -103,6 +108,9 @@ class IceFilterTask(EOTask):
             if ndsi_mean < self.threshold:
                 valid_indices.append(i)
 
+        if not valid_indices and len(eopatch.timestamps) > 0:
+            return eopatch.temporal_subset([])
+
         return eopatch.temporal_subset(valid_indices)
 
 
@@ -120,24 +128,38 @@ class WaterDetectionTask(EOTask):
         water_masks = []
         water_levels = []
 
-        for ndwi in eopatch.data["NDWI"]:
+        if eopatch.data["NDWI"] is None or len(eopatch.data["NDWI"]) == 0:
+            eopatch[FeatureType.MASK, "WATER_MASK"] = np.array([])
+            eopatch[FeatureType.SCALAR, "WATER_LEVEL"] = np.array([])
+            return eopatch
+
+        for ndwi_idx, ndwi in enumerate(eopatch.data["NDWI"]):
             mask = self.detect_water(ndwi[..., 0])
-            final_mask = mask[..., np.newaxis] * eopatch.mask_timeless["NOMINAL_WATER"]
+
+            current_nominal_water = eopatch.mask_timeless["NOMINAL_WATER"]
+            if current_nominal_water.ndim == 2:
+                current_nominal_water = current_nominal_water[..., np.newaxis]
+
+            final_mask = mask[..., np.newaxis] * current_nominal_water
+
             water_masks.append(final_mask)
 
             total_water_pixels = np.count_nonzero(final_mask)
-            total_nominal_pixels = np.count_nonzero(eopatch.mask_timeless["NOMINAL_WATER"])
+            total_nominal_pixels = np.count_nonzero(current_nominal_water)
             water_level = total_water_pixels / total_nominal_pixels if total_nominal_pixels > 0 else 0
             water_levels.append(water_level)
 
-        eopatch[FeatureType.MASK, "WATER_MASK"] = np.array(water_masks)
-        eopatch[FeatureType.SCALAR, "WATER_LEVEL"] = np.array(water_levels)[..., np.newaxis]
+        eopatch[FeatureType.MASK, "WATER_MASK"] = np.array(water_masks) if water_masks else np.empty(
+            (0, *eopatch.data["NDWI"].shape[1:-1], 1), dtype=bool)
+        eopatch[FeatureType.SCALAR, "WATER_LEVEL"] = np.array(water_levels)[
+            ..., np.newaxis] if water_levels else np.empty((0, 1), dtype=float)
 
         return eopatch
 
 
-def create_workflow(gdf, cloud_threshold=0.05, ice_threshold=0.6):
-    download_task = create_download_task()
+def create_workflow(gdf, cloud_threshold=0.05, ice_threshold=0.6,
+                    max_cloud_coverage_download=0.8, resolution=None):
+    download_task = create_download_task(maxcc=max_cloud_coverage_download, resolution=resolution)
     calculate_ndwi = create_ndwi_task()
     calculate_ndsi = create_ndsi_task()
     add_nominal_water = create_nominal_water_task(gdf)

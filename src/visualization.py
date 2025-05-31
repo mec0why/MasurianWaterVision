@@ -63,10 +63,13 @@ def plot_rgb_w_water(eopatch, idx, title=None):
     return fig, ax
 
 
-def get_water_level_data(eopatch, max_coverage=1.0):
+def get_water_level_data(eopatch, max_coverage=1.0, median_threshold_multiplier=0.96):
     dates = np.asarray(eopatch.timestamps)
+    water_level_data = eopatch.scalar["WATER_LEVEL"][:, 0]
+    median_water_level = np.median(water_level_data) if len(water_level_data) > 0 else 0
+
     valid_data_mask = (eopatch.scalar["COVERAGE"][:, 0] < max_coverage) & \
-                      (eopatch.scalar["WATER_LEVEL"][:, 0] >= (np.median(eopatch.scalar["WATER_LEVEL"]) * 0.96))
+                      (water_level_data >= (median_water_level * median_threshold_multiplier))
     valid_indices = np.where(valid_data_mask)[0]
 
     return dates, valid_data_mask, valid_indices
@@ -94,8 +97,10 @@ def predict_future_water_levels(model, scaler, last_date, periods=24):
     return future_dates, predictions
 
 
-def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24):
-    dates, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage)
+def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
+                      median_threshold_multiplier=0.96):
+    dates, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage,
+                                                     median_threshold_multiplier)
     fig, ax = plt.subplots(figsize=(20, 7))
 
     hist_dates = dates[valid_data_mask]
@@ -173,7 +178,7 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24):
         ax.text(0.98, 0.05, pred_stats_text, transform=ax.transAxes, verticalalignment='bottom',
                 horizontalalignment='right', bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8), fontsize=9)
         print(
-            f"Prognoza poziomów wody na kolejne {predict_months} miesiące (do {future_dates_pred[-1].strftime('%Y-%m-%d')}).")
+            f"Prognoza poziomów wody do {future_dates_pred[-1].strftime('%Y-%m-%d')}.")
 
     ax.set_ylim(0.0, 1.1)
     ax.set_xlabel("Rok", fontsize=12)
@@ -231,8 +236,10 @@ def plot_ndvi(eopatch, idx, title=None, compare_idx=None):
         return fig, (ax1, ax2)
 
 
-def plot_seasonal_water_levels(eopatch, max_coverage=1.0):
-    dates, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage)
+def plot_seasonal_water_levels(eopatch, max_coverage=1.0,
+                               median_threshold_multiplier=0.96):
+    dates, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage,
+                                                     median_threshold_multiplier)
     valid_dates = dates[valid_data_mask]
     water_levels = eopatch.scalar["WATER_LEVEL"][valid_data_mask, 0]
 
@@ -266,7 +273,7 @@ def plot_seasonal_water_levels(eopatch, max_coverage=1.0):
     for i, row in monthly_avg.iterrows():
         if row['count'] > 0:
             ax.text(row['month'], 0.01, f'n={row["count"]}', ha='center', va='bottom', fontsize=9, color='dimgray',
-                    rotation=90)
+                    rotation=90, transform=ax.get_xaxis_transform())
 
     ax.set_xticks(monthly_avg['month'])
     ax.set_xticklabels(monthly_avg['month_name'])
@@ -378,8 +385,10 @@ def plot_water_mask_comparison(eopatch, idx1, idx2, titles=None):
     return fig, [ax1, ax2, ax3]
 
 
-def plot_water_level_histogram(eopatch, max_coverage=1.0, bins=20):
-    _, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage)
+def plot_water_level_histogram(eopatch, max_coverage=1.0, bins=20,
+                               median_threshold_multiplier=0.96):
+    _, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage,
+                                                 median_threshold_multiplier)
     water_levels = eopatch.scalar["WATER_LEVEL"][valid_data_mask, 0]
 
     fig, ax = plt.subplots(figsize=(12, 8))
