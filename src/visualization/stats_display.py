@@ -3,67 +3,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.colors import ListedColormap
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch, Rectangle
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from skimage.filters import sobel
-from skimage.morphology import closing, disk
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-NDVI_CMAP = ListedColormap(['#d73027', '#fc8d59', '#fee08b', '#d9ef8b', '#91cf60', '#1a9850'])
-WATER_MASK_DIFF_CMAP = ListedColormap(['#f2f2f2', '#21a9e1', '#e10c0c', '#0c5de1'])
-SEASON_COLORS = {'Zima': 'lightblue', 'Wiosna': 'springgreen', 'Lato': 'gold', 'Jesień': 'orange'}
-MONTH_NAMES = ['Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru']
+from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
+from .constants import SEASON_COLORS, MONTH_NAMES
+from ..modeling.forecast import train_water_level_model, predict_future_water_levels
 
 
-def _calculate_ndvi_values(eopatch, idx):
-    red = eopatch.data["BANDS"][idx, :, :, 2]
-    nir = eopatch.data["BANDS"][idx, :, :, 3]
-    ndvi = np.zeros_like(red, dtype=float)
-    valid_mask = (nir + red) > 0
-    ndvi[valid_mask] = (nir[valid_mask].astype(float) - red[valid_mask].astype(float)) / (
-                nir[valid_mask].astype(float) + red[valid_mask].astype(float))
-    return ndvi
-
-
-def _get_date_features(dates_array):
-    return np.array([
-        [np.sin(2 * np.pi * d.timetuple().tm_yday / 365), np.cos(2 * np.pi * d.timetuple().tm_yday / 365),
-         np.sin(2 * np.pi * d.month / 12), np.cos(2 * np.pi * d.month / 12), d.year]
-        for d in dates_array
-    ])
-
-
-def plot_rgb_w_water(eopatch, idx, title=None):
-    ratio = np.abs(eopatch.bbox.max_x - eopatch.bbox.min_x) / np.abs(eopatch.bbox.max_y - eopatch.bbox.min_y)
-    fig, ax = plt.subplots(figsize=(ratio * 10, 10))
-
-    ax.imshow(np.clip(2.5 * eopatch.data["BANDS"][idx][:, :, [2, 1, 0]], 0, 1))
-
-    observed = closing(eopatch.mask["WATER_MASK"][idx, :, :, 0], disk(1))
-    nominal = sobel(eopatch.mask_timeless["NOMINAL_WATER"][:, :, 0])
-    observed = sobel(observed)
-
-    nominal = np.ma.masked_where(~nominal.astype(bool), nominal)
-    observed = np.ma.masked_where(~observed.astype(bool), observed)
-
-    ax.imshow(nominal, cmap=plt.cm.Reds)
-    ax.imshow(observed, cmap=plt.cm.Blues)
-
-    if title:
-        ax.set_title(title)
-
-    ax.axis("off")
-    plt.tight_layout()
-
-    return fig, ax
-
-
-def get_water_level_data(eopatch, max_coverage=1.0, median_threshold_multiplier=0.96):
+def get_water_level_data(eopatch, max_coverage=1.0, median_threshold_multiplier=0.98):
     dates = np.asarray(eopatch.timestamps)
     water_level_data = eopatch.scalar["WATER_LEVEL"][:, 0]
     median_water_level = np.median(water_level_data) if len(water_level_data) > 0 else 0
@@ -75,30 +22,8 @@ def get_water_level_data(eopatch, max_coverage=1.0, median_threshold_multiplier=
     return dates, valid_data_mask, valid_indices
 
 
-def train_water_level_model(dates, water_levels):
-    X = _get_date_features(dates)
-    X_train, _, y_train, _ = train_test_split(X, water_levels, test_size=0.2, random_state=42)
-
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train_scaled, y_train)
-
-    return model, scaler
-
-
-def predict_future_water_levels(model, scaler, last_date, periods=24):
-    future_dates = pd.date_range(start=last_date, periods=periods, freq='ME')
-    X_future = _get_date_features(future_dates)
-    X_future_scaled = scaler.transform(X_future)
-    predictions = np.clip(model.predict(X_future_scaled), 0, 1)
-
-    return future_dates, predictions
-
-
 def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
-                      median_threshold_multiplier=0.96):
+                      median_threshold_multiplier=0.98):
     dates, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage,
                                                      median_threshold_multiplier)
     fig, ax = plt.subplots(figsize=(20, 7))
@@ -202,42 +127,8 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
     return ax, valid_data_mask, _
 
 
-def plot_ndvi(eopatch, idx, title=None, compare_idx=None):
-    ndvi = _calculate_ndvi_values(eopatch, idx)
-    ratio = np.abs(eopatch.bbox.max_x - eopatch.bbox.min_x) / np.abs(eopatch.bbox.max_y - eopatch.bbox.min_y)
-
-    if compare_idx is None:
-        fig, ax = plt.subplots(figsize=(ratio * 10, 10))
-        im = ax.imshow(ndvi, cmap=NDVI_CMAP, vmin=-1, vmax=1)
-        plt.colorbar(im, ax=ax).set_label('NDVI (indeks -1 do 1)')
-        ax.set_title(title if title else f"NDVI - {eopatch.timestamps[idx]}")
-        ax.axis("off")
-        plt.tight_layout()
-        return fig, ax
-    else:
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(ratio * 20, 10))
-        ndvi_compare = _calculate_ndvi_values(eopatch, compare_idx)
-
-        im1 = ax1.imshow(ndvi, cmap=NDVI_CMAP, vmin=-1, vmax=1)
-        ax1.set_title(f"NDVI - {eopatch.timestamps[idx]}")
-        ax1.axis("off")
-
-        im2 = ax2.imshow(ndvi_compare, cmap=NDVI_CMAP, vmin=-1, vmax=1)
-        ax2.set_title(f"NDVI - {eopatch.timestamps[compare_idx]}")
-        ax2.axis("off")
-
-        cax = make_axes_locatable(ax2).append_axes("right", size="3%", pad=0.2)
-        fig.colorbar(im1, cax=cax).set_label('NDVI (indeks -1 do 1)', fontsize=12)
-
-        if title:
-            fig.suptitle(title, fontsize=16, y=0.98)
-
-        plt.subplots_adjust(wspace=0.05, top=0.9)
-        return fig, (ax1, ax2)
-
-
 def plot_seasonal_water_levels(eopatch, max_coverage=1.0,
-                               median_threshold_multiplier=0.96):
+                               median_threshold_multiplier=0.98):
     dates, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage,
                                                      median_threshold_multiplier)
     valid_dates = dates[valid_data_mask]
@@ -321,72 +212,8 @@ def plot_seasonal_water_levels(eopatch, max_coverage=1.0,
     return fig, ax
 
 
-def plot_water_mask_comparison(eopatch, idx1, idx2, titles=None):
-    mask1 = eopatch.mask["WATER_MASK"][idx1, :, :, 0]
-    mask2 = eopatch.mask["WATER_MASK"][idx2, :, :, 0]
-
-    diff_mask = np.zeros_like(mask1, dtype=np.uint8)
-    diff_mask[np.logical_and(~mask1, mask2)] = 1
-    diff_mask[np.logical_and(mask1, ~mask2)] = 2
-    diff_mask[np.logical_and(mask1, mask2)] = 3
-
-    if titles:
-        title_mask1, title_mask2, fig_super_title = titles
-        subplot_diff_title = "Analiza porównawcza"
-    else:
-        timestamp1_str = eopatch.timestamps[idx1].strftime('%Y-%m-%d')
-        timestamp2_str = eopatch.timestamps[idx2].strftime('%Y-%m-%d')
-        title_mask1 = f"Maska: {timestamp1_str}"
-        title_mask2 = f"Maska: {timestamp2_str}"
-        fig_super_title = f"Porównanie masek wodnych: {timestamp1_str} vs {timestamp2_str}"
-        subplot_diff_title = "Różnice"
-
-    data_aspect_ratio = np.abs(eopatch.bbox.max_x - eopatch.bbox.min_x) / np.abs(
-        eopatch.bbox.max_y - eopatch.bbox.min_y)
-
-    plot_height = 5
-    single_plot_width = plot_height * data_aspect_ratio if data_aspect_ratio > 0 else plot_height
-
-    total_fig_width = single_plot_width * 3 + single_plot_width * 0.2 + 1.5
-    total_fig_width = max(12, total_fig_width)
-    fig_height = plot_height + 1.5
-
-    fig = plt.figure(figsize=(total_fig_width, fig_height))
-
-    gs_width_ratios = [single_plot_width] * 3 + [single_plot_width * 0.2]
-    gs = fig.add_gridspec(1, 4, width_ratios=gs_width_ratios, wspace=0.4 if data_aspect_ratio > 0.5 else 0.2)
-
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax3 = fig.add_subplot(gs[0, 2])
-    cbar_ax = fig.add_subplot(gs[0, 3])
-
-    fig.suptitle(fig_super_title, fontsize=16)
-
-    ax1.imshow(mask1, cmap='Blues')
-    ax1.set_title(title_mask1, fontsize=12)
-    ax1.axis('off')
-
-    ax2.imshow(mask2, cmap='Blues')
-    ax2.set_title(title_mask2, fontsize=12)
-    ax2.axis('off')
-
-    im = ax3.imshow(diff_mask, cmap=WATER_MASK_DIFF_CMAP, vmin=0, vmax=3)
-    ax3.set_title(subplot_diff_title, fontsize=12)
-    ax3.axis('off')
-
-    cbar = plt.colorbar(im, cax=cbar_ax, orientation='vertical')
-    cbar.set_ticks([0.375, 1.125, 1.875, 2.625])
-    cbar.set_ticklabels(['Brak wody', 'Nowa woda', 'Zanikła woda', 'Stała woda'])
-    cbar.ax.tick_params(labelsize=10)
-
-    fig.subplots_adjust(top=0.85, bottom=0.05, left=0.05, right=0.95)
-
-    return fig, [ax1, ax2, ax3]
-
-
 def plot_water_level_histogram(eopatch, max_coverage=1.0, bins=20,
-                               median_threshold_multiplier=0.96):
+                               median_threshold_multiplier=0.98):
     _, valid_data_mask, _ = get_water_level_data(eopatch, max_coverage,
                                                  median_threshold_multiplier)
     water_levels = eopatch.scalar["WATER_LEVEL"][valid_data_mask, 0]

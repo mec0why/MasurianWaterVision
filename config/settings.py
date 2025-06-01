@@ -1,0 +1,17 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATA_FOLDER = os.getenv("DATA_FOLDER", "data")
+WKT_FILE_PATH = os.getenv("WKT_FILE_PATH")
+BOUNDARY_BUFFER_PERCENTAGE = float(os.getenv("BOUNDARY_BUFFER_PERCENTAGE", 0.1))
+CLOUD_THRESHOLD = float(os.getenv("CLOUD_THRESHOLD", 0.05))
+ICE_THRESHOLD = float(os.getenv("ICE_THRESHOLD", 0.6))
+MAX_CLOUD_COVERAGE_DOWNLOAD = float(os.getenv("MAX_CLOUD_COVERAGE_DOWNLOAD", 0.8))
+SATELLITE_IMAGE_RESOLUTION = int(os.getenv("SATELLITE_IMAGE_RESOLUTION", 10))
+TIME_RANGE_YEARS = int(os.getenv("TIME_RANGE_YEARS", 10))
+PREDICTION_MONTHS = int(os.getenv("PREDICTION_MONTHS", 24))
+WATER_LEVEL_MEDIAN_THRESHOLD = float(os.getenv("WATER_LEVEL_MEDIAN_THRESHOLD", 0.98))
+PLOTS_FOLDER = os.getenv("PLOTS_FOLDER", "plots")
+CACHE_FOLDER = os.getenv("CACHE_FOLDER", "cached_data")
