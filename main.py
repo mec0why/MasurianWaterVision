@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from config import settings
 from src.data_handling.geo_preparation import load_water_boundary, create_bounding_box, create_geodataframe
 from src.eolearn.pipeline import create_workflow
+from src.modeling.forecast import inspect_weather_correlations, compare_models_with_and_without_weather
 from src.visualization.image_display import plot_rgb_w_water, plot_ndvi
 from src.visualization.stats_display import get_water_level_data, plot_water_levels, plot_seasonal_water_levels, plot_water_level_histogram
 from src.visualization.comparison_display import plot_water_mask_comparison
@@ -14,7 +15,7 @@ from src.utils.file_operations import create_directory, save_plot
 def main():
     create_directory(settings.DATA_FOLDER)
 
-    print("Używane parametry zmiennych środowiskowych:")
+    print("\nUżywane parametry zmiennych środowiskowych:")
     print(f"  WKT_FILE_PATH: {settings.WKT_FILE_PATH}")
     print(f"  BOUNDARY_BUFFER_PERCENTAGE: {settings.BOUNDARY_BUFFER_PERCENTAGE}")
     print(f"  CLOUD_THRESHOLD: {settings.CLOUD_THRESHOLD}")
@@ -24,6 +25,7 @@ def main():
     print(f"  TIME_RANGE_YEARS: {settings.TIME_RANGE_YEARS}")
     print(f"  PREDICTION_MONTHS: {settings.PREDICTION_MONTHS}")
     print(f"  WATER_LEVEL_MEDIAN_THRESHOLD: {settings.WATER_LEVEL_MEDIAN_THRESHOLD}")
+    print(f"  METEOSTAT_STATION_ID: {settings.METEOSTAT_STATION_ID}")
     print("-" * 50)
 
     if not settings.WKT_FILE_PATH or not os.path.exists(settings.WKT_FILE_PATH):
@@ -31,7 +33,6 @@ def main():
         print("Upewnij się, że zmienna WKT_FILE_PATH jest poprawnie ustawiona w pliku .env i wskazuje na istniejący plik .wkt.")
         return
 
-    print("Wczytywanie granic jeziora i konfiguracja przepływu pracy...")
     lake_boundary = load_water_boundary(settings.WKT_FILE_PATH)
     lake_bbox = create_bounding_box(lake_boundary, buffer_percentage=settings.BOUNDARY_BUFFER_PERCENTAGE)
     lake_gdf = create_geodataframe(lake_boundary)
@@ -46,6 +47,8 @@ def main():
         resolution=settings.SATELLITE_IMAGE_RESOLUTION
     )
 
+    print("Granice jeziora oraz konfiguracja przepływu pracy zostały wczytane poprawnie.")
+
     current_date = datetime.now()
     ten_years_ago = current_date - timedelta(days=365 * settings.TIME_RANGE_YEARS)
     time_range = [ten_years_ago.strftime("%Y-%m-%d"), current_date.strftime("%Y-%m-%d")]
@@ -59,16 +62,17 @@ def main():
     })
 
     patch = result.outputs["final_eopatch"]
-    print(f"Pobieranie i przetwarzanie zakończone. Znaleziono {len(patch.timestamps)} pasujących zdjęć satelitarnych.")
+    print(f"\nPobieranie i przetwarzanie zakończone. Znaleziono {len(patch.timestamps)} pasujących zdjęć satelitarnych.")
 
     if len(patch.timestamps) == 0:
-        print("Nie znaleziono żadnych zdjęć dla podanego zakresu i obszaru. Zakończono działanie programu.")
+        print("Nie znaleziono żadnych zdjęć dla podanego zakresu i obszaru. Kończenie działania programu...")
         return
 
+    print("-" * 50)
     print("Generowanie wykresów wizualizacyjnych...")
     plot_rgb_w_water(patch, 0, title=f"Pierwsze zdjęcie - {patch.timestamps[0]}")
     save_plot("first_image.png")
-    print(f"Zapisano wykres: first_image.png - Pierwsze zdjęcie z dnia {patch.timestamps[0].strftime('%Y-%m-%d')}.")
+    print(f"\nZapisano wykres: first_image.png - Pierwsze zdjęcie z dnia {patch.timestamps[0].strftime('%Y-%m-%d')}.")
 
     plot_rgb_w_water(patch, -1, title=f"Ostatnie zdjęcie - {patch.timestamps[-1]}")
     save_plot("last_image.png")
@@ -77,19 +81,19 @@ def main():
     dates, valid_data, valid_indices = get_water_level_data(patch, median_threshold_multiplier=settings.WATER_LEVEL_MEDIAN_THRESHOLD)
 
     if len(valid_indices) == 0:
-        print("Brak wystarczających danych do wygenerowania pozostałych wykresów po zastosowaniu filtrów (np. lód).")
+        print("\nBrak wystarczających danych do wygenerowania pozostałych wykresów po zastosowaniu filtrów (np. lód).")
         print("Możliwe przyczyny: wszystkie zdjęcia zostały odrzucone przez filtr lodu, lub inne kryteria filtracji uniemożliwiające analizę.")
         if len(patch.scalar["WATER_LEVEL"]) > 0:
             plot_water_levels(patch, predict_months=settings.PREDICTION_MONTHS, median_threshold_multiplier=settings.WATER_LEVEL_MEDIAN_THRESHOLD)
             save_plot("water_levels_timeline.png")
-            print(f"Zapisano wykres: water_levels_timeline.png - Oś czasu poziomu wody z predykcją AI.")
+            print(f"\nZapisano wykres: water_levels_timeline.png - Oś czasu poziomu wody z ograniczoną predykcją AI.")
         plt.show()
         return
 
     water_levels = patch.scalar["WATER_LEVEL"][valid_data, 0]
 
     if len(water_levels) == 0:
-        print("Brak danych o poziomach wody po filtracji. Nie można wygenerować wykresów przedstawiających minima i maksima.")
+        print("\nBrak danych o poziomach wody po filtracji. Nie można wygenerować pozostałych wizualizacji.")
         plt.show()
         return
 
@@ -136,13 +140,28 @@ def main():
     save_plot("ndvi_comparison.png")
     print(f"Zapisano wykres: ndvi_comparison.png - Porównanie NDVI z dnia {patch.timestamps[min_idx].strftime('%Y-%m-%d')} i {patch.timestamps[max_idx].strftime('%Y-%m-%d')}.")
 
+    hist_dates = dates[valid_data]
+
+    print("-" * 50)
+    print("Przeprowadzam analizę korelacji...")
+    inspect_weather_correlations(hist_dates, water_levels)
+    save_plot("weather_feature_correlation.png")
+    print(f"\nZapisano wykres: weather_feature_correlation.png - Korelacja cech pogodowych z poziomem wody.")
+
+    print("-" * 50)
+    print("Rozpoczynam porównanie modeli...")
+    compare_models_with_and_without_weather(hist_dates, water_levels)
+
+    print("-" * 50)
     plot_water_levels(patch, predict_months=settings.PREDICTION_MONTHS, median_threshold_multiplier=settings.WATER_LEVEL_MEDIAN_THRESHOLD)
     save_plot("water_levels_timeline.png")
-    print(f"Zapisano wykres: water_levels_timeline.png - Oś czasu poziomu wody z predykcją AI.")
+    print(f"\nZapisano wykres: water_levels_timeline.png - Oś czasu poziomu wody z predykcją AI.")
 
+    print("-" * 50)
     print("Wszystkie wykresy zostały zapisane w folderze 'plots'.")
-    print("Wyświetlanie wizualizacji. Zamknij okna, aby zakończyć program.")
+    print("Wyświetlanie wizualizacji...")
     plt.show()
+    print("\nZamknij okna, aby zakończyć działanie programu.")
 
 
 if __name__ == "__main__":

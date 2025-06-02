@@ -75,7 +75,7 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
 
     future_dates_pred = []
     if len(hist_dates) > 10 and predict_months > 0:
-        print("Trenowanie modelu do predykcji poziomów wody...")
+        print("Trenowanie modelu do predykcji z walidacją...")
         model_rf, scaler_rf = train_water_level_model(hist_dates, water_levels)
         future_dates_pred, predictions_rf = predict_future_water_levels(model_rf, scaler_rf, hist_dates[-1],
                                                                         periods=predict_months)
@@ -93,8 +93,9 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
                         color='red', alpha=0.2, label='90% przedział ufności', zorder=3)
         ax.plot(future_dates_pred, predictions_rf, "--", color="red", linewidth=2, alpha=0.8, label="Predykcja AI",
                 zorder=6)
-        ax.axvline(x=hist_dates[-1], color='dimgray', linestyle='--', linewidth=1.5, alpha=0.8, zorder=4)
-        ax.text(hist_dates[-1], 1.05, "Początek predykcji", ha='center', va='bottom', color='dimgray', fontsize=9)
+        ax.axvline(x=hist_dates[-1], color='dimgray', linestyle='-.', linewidth=1.5, alpha=0.9, zorder=4)
+        ax.text(hist_dates[-1] + pd.Timedelta(days=28), 1.05, "Początek predykcji", ha='left', va='bottom', color='red', fontsize=9,
+                bbox=dict(boxstyle='round,pad=0.2', fc='white', ec='red', alpha=0.8))
 
         pred_stats_text = (f"Statystyki predykcji ({predict_months} mies.):\n"
                            f"  Średnia: {np.mean(predictions_rf):.3f}\n"
@@ -103,7 +104,7 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
         ax.text(0.98, 0.05, pred_stats_text, transform=ax.transAxes, verticalalignment='bottom',
                 horizontalalignment='right', bbox=dict(boxstyle='round', facecolor='mistyrose', alpha=0.8), fontsize=9)
         print(
-            f"Prognoza poziomów wody do {future_dates_pred[-1].strftime('%Y-%m-%d')}.")
+            f"\nPrognoza poziomów wody do {future_dates_pred[-1].strftime('%Y-%m-%d')}.")
 
     ax.set_ylim(0.0, 1.1)
     ax.set_xlabel("Rok", fontsize=12)
@@ -118,8 +119,7 @@ def plot_water_levels(eopatch, max_coverage=1.0, predict_months=24,
     current_date_marker = pd.Timestamp.now()
     all_dates_for_marker = hist_dates.tolist() + (future_dates_pred.tolist() if len(future_dates_pred) > 0 else [])
     if len(all_dates_for_marker) > 0 and min(all_dates_for_marker) <= current_date_marker <= max(all_dates_for_marker):
-        ax.axvline(x=current_date_marker, color='black', linestyle='-.', alpha=0.5)
-        ax.text(current_date_marker, 0.02, 'Dziś', ha='center', va='bottom',
+        ax.text(current_date_marker - pd.Timedelta(days=42), 0.02, 'Dziś', ha='right', va='bottom',
                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
     fig.subplots_adjust(bottom=0.15, top=0.9)
